@@ -22,15 +22,35 @@ typedef struct {
     int total_bytes;  /* Total bytes* received successfully with out collision* from this client. */
 } Client;
 
+typedef struct {
+    struct sockaddr_in addr;
+    int frames_received;
+    int collisions;
+    int total_bytes;
+} ClientStats;
+
+
 // Function to remove a client (close its socket and shift the following clients backwards in the array)
+// and copy the client stats to allstats array
 // Returns client count
-int removeClient(Client clients[], int count, int index) {
+int removeClient(Client clients[], int count, int index, ClientStats all_stats[], int* stats_count_ptr) {
+    // Save stats before removing
+    all_stats[*stats_count_ptr].addr = clients[index].addr;
+    all_stats[*stats_count_ptr].frames_received = clients[index].frames_received;
+    all_stats[*stats_count_ptr].collisions = clients[index].collisions;
+    all_stats[*stats_count_ptr].total_bytes = clients[index].total_bytes;
+    (*stats_count_ptr)++;
+
     closesocket(clients[index].sock);
+
+    // Shift remaining clients left
     for (int j = index; j < count - 1; j++) {
         clients[j] = clients[j + 1];
     }
+
     return count - 1;
 }
+
 
 int main(int argc, char* argv[]) {
 
@@ -86,6 +106,9 @@ int main(int argc, char* argv[]) {
     // Array for client info
     Client clients[MAX_CLIENTS]; // each client is a server
     int client_count = 0;
+
+    ClientStats all_stats[MAX_CLIENTS]; // to keep client stats after removal
+    int stats_count = 0;
 
     char buffer[BUFFER_SIZE];
 
@@ -196,7 +219,7 @@ int main(int argc, char* argv[]) {
                             inet_ntoa(clients[i].addr.sin_addr), ntohs(clients[i].addr.sin_port));
 
                         /* for robustness remove client if send() failed */
-                        client_count = removeClient(clients, client_count, idx);
+                        client_count = removeClient(clients, client_count, idx, all_stats, &stats_count);
                     }
                 }
                 fprintf(stderr, "Successful transmission from %s:%d, %d bytes broadcasted.\n",
@@ -206,7 +229,7 @@ int main(int argc, char* argv[]) {
                 // The client disconnected gracefully.
                 fprintf(stderr, "Client %s:%d disconnected.\n",
                     inet_ntoa(clients[idx].addr.sin_addr), ntohs(clients[idx].addr.sin_port));
-                client_count = removeClient(clients, client_count, idx);
+                client_count = removeClient(clients, client_count, idx, all_stats, &stats_count);
             }
             else {
                 // recv() error
@@ -227,7 +250,7 @@ int main(int argc, char* argv[]) {
                 else if (bytes_received == 0) {
                     fprintf(stderr, "Client %s:%d disconnected during collision.\n",
                         inet_ntoa(clients[idx].addr.sin_addr), ntohs(clients[idx].addr.sin_port));
-                    client_count = removeClient(clients, client_count, idx);
+                    client_count = removeClient(clients, client_count, idx, all_stats, &stats_count);
                 }
                 else {
                     fprintf(stderr, "recv() error during collision from client %s:%d.\n",
@@ -255,13 +278,22 @@ int main(int argc, char* argv[]) {
 
     // Before exiting, display statistics for each client on stderr.
     fprintf(stderr, "\nChannel Statistics:\n");
+
+    for (int i = 0; i < stats_count; i++) {
+        double avg_bw = (elapsed_time_sec > 0) ? (all_stats[i].total_bytes / elapsed_time_sec) : 0;
+        fprintf(stderr, "Client %s:%d - Frames: %d, Collisions: %d, Average Bandwidth: %.2f bps\n",
+            inet_ntoa(all_stats[i].addr.sin_addr), ntohs(all_stats[i].addr.sin_port),
+            all_stats[i].frames_received, all_stats[i].collisions, avg_bw);
+    }
+
+    // Optionally print still-connected clients
     for (int i = 0; i < client_count; i++) {
-        double avg_bw = (elapsed_time_sec > 0) ? (clients[i].total_bytes / elapsed_time_sec) : 0; // check division by zero
-        // You could convert avgBandwidth to Mbps if desired.
+        double avg_bw = (elapsed_time_sec > 0) ? (clients[i].total_bytes / elapsed_time_sec) : 0;
         fprintf(stderr, "Client %s:%d - Frames: %d, Collisions: %d, Average Bandwidth: %.2f bps\n",
             inet_ntoa(clients[i].addr.sin_addr), ntohs(clients[i].addr.sin_port),
             clients[i].frames_received, clients[i].collisions, avg_bw);
     }
+
 
     // ----- Clean up resources -----
     for (int i = 0; i < client_count; i++) {
