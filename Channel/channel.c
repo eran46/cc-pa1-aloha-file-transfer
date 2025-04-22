@@ -149,6 +149,7 @@ int main(int argc, char* argv[]) {
             clients[client_count].addr = client_addr;
             clients[client_count].frames_received = 0;
             clients[client_count].collisions = 0;
+            clients[client_count].total_bytes = 0;
             printf("New client connected: %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
             client_count++;
             new_sock = accept(channel_sock, (struct sockaddr*)&client_addr, &client_addr_len);
@@ -219,7 +220,7 @@ int main(int argc, char* argv[]) {
                             inet_ntoa(clients[i].addr.sin_addr), ntohs(clients[i].addr.sin_port));
 
                         /* for robustness remove client if send() failed */
-                        client_count = removeClient(clients, client_count, idx, all_stats, &stats_count);
+                        client_count = removeClient(clients, client_count, i, all_stats, &stats_count);
                     }
                 }
                 fprintf(stderr, "Successful transmission from %s:%d, %d bytes broadcasted.\n",
@@ -230,16 +231,19 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "Client %s:%d disconnected.\n",
                     inet_ntoa(clients[idx].addr.sin_addr), ntohs(clients[idx].addr.sin_port));
                 client_count = removeClient(clients, client_count, idx, all_stats, &stats_count);
+                continue;
             }
             else {
                 // recv() error
                 fprintf(stderr, "recv() error from client %s:%d.\n",
                     inet_ntoa(clients[idx].addr.sin_addr), ntohs(clients[idx].addr.sin_port));
+                client_count = removeClient(clients, client_count, idx, all_stats, &stats_count);
+                continue; // or break;
             }
         }
         else if (ready_count > 1) {
             // collision
-            for (int j = 0; j < ready_count; j++) {
+            /*for (int j = 0; j < ready_count; j++) {
                 int idx = ready_indexes[j];
                 int bytes_received = recv(clients[idx].sock, buffer, BUFFER_SIZE, 0);
                 if (bytes_received > 0) {
@@ -256,13 +260,36 @@ int main(int argc, char* argv[]) {
                     fprintf(stderr, "recv() error during collision from client %s:%d.\n",
                         inet_ntoa(clients[idx].addr.sin_addr), ntohs(clients[idx].addr.sin_port));
                 }
+            }*/
+            for (int j = ready_count - 1; j >= 0; j--) {
+                int idx = ready_indexes[j];
+                int bytes_received = recv(clients[idx].sock, buffer, BUFFER_SIZE, 0);
+                if (bytes_received > 0) {
+                    clients[idx].collisions++;
+                    fprintf(stderr, "Collision detected from %s:%d, received %d bytes (frame discarded).\n",
+                        inet_ntoa(clients[idx].addr.sin_addr), ntohs(clients[idx].addr.sin_port), bytes_received);
+                }
+                else if (bytes_received == 0) {
+                    fprintf(stderr, "Client %s:%d disconnected during collision.\n",
+                        inet_ntoa(clients[idx].addr.sin_addr), ntohs(clients[idx].addr.sin_port));
+                    client_count = removeClient(clients, client_count, idx, all_stats, &stats_count);
+                }
+                else {
+                    fprintf(stderr, "recv() error during collision from client %s:%d (err %d).\n",
+                        inet_ntoa(clients[idx].addr.sin_addr), ntohs(clients[idx].addr.sin_port), WSAGetLastError());
+                    client_count = removeClient(clients, client_count, idx, all_stats, &stats_count);  // also remove on error
+                }
             }
+
+
             // After processing all colliding frames, send the special collision signal to all clients.
             for (int i = 0; i < client_count; i++) {
                 int bytesSent = send(clients[i].sock, COLLISION_SIGNAL, COLLISION_SIGNAL_LEN, 0);
                 if (bytesSent == SOCKET_ERROR) {
                     fprintf(stderr, "send() collision signal failed to client %s:%d\n",
                         inet_ntoa(clients[i].addr.sin_addr), ntohs(clients[i].addr.sin_port));
+                    client_count = removeClient(clients, client_count, i, all_stats, &stats_count);
+                    i--; // fix shift
                 }
             }
             fprintf(stderr, "Collision occurred among %d clients. Collision signal sent to all.\n", ready_count);
