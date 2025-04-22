@@ -103,6 +103,16 @@ int main(int argc, char* argv[]) {
         WSACleanup();
         return 1;
     }
+    // Allocate a buffer for receiving echoes
+    char* recv_buf = (char*)malloc(frame_size);
+    if (!recv_buf) {
+        fprintf(stderr, "Memory allocation failed for recv_buf.\n");
+        free(frame_buf);
+        fclose(file);
+        closesocket(sock);
+        WSACleanup();
+        return 1;
+    }
 
     // Variables for sending loop
     int frame_id = 0;                // Sequence number for frames
@@ -135,7 +145,7 @@ int main(int argc, char* argv[]) {
             int sel = select(0, &readfds, NULL, NULL, &tv);
             if (sel > 0 && FD_ISSET(sock, &readfds)) {
                 // Receive echo/ACK from channel
-                char recv_buf[frame_size];
+                
                 int received = recv(sock, recv_buf, frame_size, 0);
                 if (received > 0) {
                     int recv_id;
@@ -188,6 +198,7 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "Average bandwidth: %.3f Mbps\n", bandwidth_mbps);
 
     // Free resources and close everything
+    free(recv_buf);
     free(frame_buf);
     fclose(file);
     closesocket(sock);
